@@ -11,6 +11,7 @@ namespace MySqlConnector.Protocol.Payloads
 		public ulong LastInsertId { get; }
 		public ServerStatus ServerStatus { get; }
 		public int WarningCount { get; }
+		public string? StatusInfo { get; }
 		public string? NewSchema { get; }
 
 		public const byte Signature = 0x00;
@@ -36,10 +37,11 @@ namespace MySqlConnector.Protocol.Payloads
 			var serverStatus = (ServerStatus) reader.ReadUInt16();
 			var warningCount = (int) reader.ReadUInt16();
 			string? newSchema = null;
+			ReadOnlySpan<byte> statusBytes;
 
 			if (clientSessionTrack && (serverStatus & ServerStatus.SessionStateChanged) == ServerStatus.SessionStateChanged)
 			{
-				reader.ReadLengthEncodedByteString(); // human-readable info
+				statusBytes = reader.ReadLengthEncodedByteString();
 
 				// implies ProtocolCapabilities.SessionTrack
 				var sessionStateChangeDataLength = checked((int) reader.ReadLengthEncodedInteger());
@@ -62,11 +64,18 @@ namespace MySqlConnector.Protocol.Payloads
 			}
 			else
 			{
-				// either "string<EOF> info" or "string<lenenc> info" (followed by no session change info)
-				// ignore human-readable string in both cases
+				// read EOF-terminated string
+				statusBytes = reader.ReadByteString(reader.BytesRemaining);
+
+				// try to detect if it was actually a length-prefixed string (up to 250 bytes); some servers send
+				// a length-prefixed status string even when CLIENT_SESSION_TRACK is not specified
+				if (statusBytes.Length != 0 && statusBytes[0] == statusBytes.Length - 1)
+					statusBytes = statusBytes.Slice(1);
 			}
 
-			if (affectedRowCount == 0 && lastInsertId == 0 && warningCount == 0 && newSchema is null)
+			var statusInfo = statusBytes.Length == 0 ? null : Encoding.UTF8.GetString(statusBytes);
+
+			if (affectedRowCount == 0 && lastInsertId == 0 && warningCount == 0 && statusInfo is null && newSchema is null)
 			{
 				if (serverStatus == ServerStatus.AutoCommit)
 					return s_autoCommitOk;
@@ -74,19 +83,20 @@ namespace MySqlConnector.Protocol.Payloads
 					return s_autoCommitSessionStateChangedOk;
 			}
 
-			return new OkPayload(affectedRowCount, lastInsertId, serverStatus, warningCount, newSchema);
+			return new OkPayload(affectedRowCount, lastInsertId, serverStatus, warningCount, statusInfo, newSchema);
 		}
 
-		private OkPayload(int affectedRowCount, ulong lastInsertId, ServerStatus serverStatus, int warningCount, string? newSchema)
+		private OkPayload(int affectedRowCount, ulong lastInsertId, ServerStatus serverStatus, int warningCount, string? statusInfo, string? newSchema)
 		{
 			AffectedRowCount = affectedRowCount;
 			LastInsertId = lastInsertId;
 			ServerStatus = serverStatus;
 			WarningCount = warningCount;
+			StatusInfo = statusInfo;
 			NewSchema = newSchema;
 		}
 
-		static readonly OkPayload s_autoCommitOk = new OkPayload(0, 0, ServerStatus.AutoCommit, 0, null);
-		static readonly OkPayload s_autoCommitSessionStateChangedOk = new OkPayload(0, 0, ServerStatus.AutoCommit | ServerStatus.SessionStateChanged, 0, null);
+		static readonly OkPayload s_autoCommitOk = new OkPayload(0, 0, ServerStatus.AutoCommit, 0, null, null);
+		static readonly OkPayload s_autoCommitSessionStateChangedOk = new OkPayload(0, 0, ServerStatus.AutoCommit | ServerStatus.SessionStateChanged, 0, null, null);
 	}
 }
