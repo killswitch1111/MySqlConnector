@@ -219,14 +219,16 @@ namespace MySqlConnector
 			}
 			else if (Value is string stringValue)
 			{
-				writer.Write((byte) '\'');
+				if (!ShouldNotEscape)
+					writer.Write((byte) '\'');
 
 				if (noBackslashEscapes)
 					writer.Write(stringValue.Replace("'", "''"));
 				else
 					writer.Write(stringValue.Replace("\\", "\\\\").Replace("'", "''"));
 
-				writer.Write((byte) '\'');
+				if (!ShouldNotEscape)
+					writer.Write((byte) '\'');
 			}
 			else if (Value is char charValue)
 			{
@@ -692,5 +694,14 @@ namespace MySqlConnector
 		ParameterDirection? m_direction;
 		string m_sourceColumn;
 		object? m_value;
+
+		public MySqlParameter SetShouldNotEscape(bool val)
+		{
+			_shouldNotEscape = val;
+			return this;
+		}
+
+		private bool _shouldNotEscape = false;
+		public bool ShouldNotEscape => _shouldNotEscape;
 	}
 }
